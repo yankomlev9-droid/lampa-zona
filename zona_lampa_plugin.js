@@ -1,131 +1,85 @@
-/*
- * Zona Launcher for Lampa — v0.1 (experimental)
- * Created for TCL 55C8L / Android TV.
- * Adds a "Zona" button to a movie/series detail view.
- *
- * IMPORTANT: This is NOT a Zona video-source or an automatic movie handoff.
- * It only attempts to launch the installed Zona app. Automatic opening of a
- * particular title requires a documented Zona deep-link/API (not verified).
- *
- * No outbound requests, no credentials, no tracking.
- */
+/* Zona Bridge list plugin 0.3 for Lampa. TV address 192.168.1.10:8765.
+   Displays only streams supplied by your OWN local Zona resolver (not included).
+   Adds a distinct "Zona" button and does not override the previous Zona plugin.
+*/
 (function () {
-    'use strict';
-
-    if (window.plugin_zona_launcher_v01) return;
-    window.plugin_zona_launcher_v01 = true;
-
-    var PACKAGES = ['mobi.zona', 'ru.zona'];
-    var BUTTON_CLASS = 'view--zona-launcher-v01';
-
-    function notify(message) {
-        try {
-            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function') {
-                Lampa.Noty.show(message);
-                return;
-            }
-        } catch (ignored) {}
-        try { console.log('[Zona Launcher] ' + message); } catch (ignored2) {}
-    }
-
-    function getTitle(movie) {
-        movie = movie || {};
-        return movie.title || movie.name || movie.original_title || movie.original_name || '';
-    }
-
-    function tryCordovaLauncher(title) {
-        var bridge = window.startApp;
-        if (!bridge && window.cordova && window.cordova.plugins) {
-            bridge = window.cordova.plugins.startApp || window.cordova.plugins.startapp;
-        }
-        if (!bridge || typeof bridge.set !== 'function') return false;
-
-        function tryPackage(index) {
-            if (index >= PACKAGES.length) {
-                notify('Zona не запустилась: не найден подходящий пакет Android.');
-                return;
-            }
-            try {
-                bridge.set({ application: PACKAGES[index] }).start(
-                    function () { notify('Zona запущена. Найди фильм: ' + title); },
-                    function () { tryPackage(index + 1); }
-                );
-            } catch (error) {
-                tryPackage(index + 1);
-            }
-        }
-        tryPackage(0);
-        return true;
-    }
-
-    function tryAndroidIntent(title) {
-        // WebView-dependent Android intent URL. May be blocked by the Lampa app.
-        // Deliberately no unverified movie identifiers/deep-link parameters.
-        var uri = 'intent:#Intent;package=' + PACKAGES[0] +
-            ';action=android.intent.action.MAIN;' +
-            'category=android.intent.category.LAUNCHER;end';
-        notify('Пробую открыть Zona. Если не запустится, Lampa не поддерживает Android intent.');
-        try {
-            window.location.href = uri;
-            return true;
-        } catch (error) {
-            notify('Запуск другого приложения заблокирован этой версией Lampa.');
-            return false;
-        }
-    }
-
-    function launchZona(movie) {
-        var title = getTitle(movie);
-        // Keep the name accessible from Lampa even if Android launch fails.
-        try {
-            if (Lampa.Storage && typeof Lampa.Storage.set === 'function') {
-                Lampa.Storage.set('zona_launcher_last_title', title);
-            }
-        } catch (ignored) {}
-        if (title) notify('Название для поиска в Zona: ' + title);
-        if (tryCordovaLauncher(title)) return;
-        tryAndroidIntent(title);
-    }
-
-    function addButton(event) {
-        if (!event || !event.object || !event.object.activity ||
-            typeof event.object.activity.render !== 'function') return;
-        var root = event.object.activity.render();
-        if (!root || !root.find || root.find('.' + BUTTON_CLASS).length) return;
-        var target = root.find('.full-start-new__buttons, .full-start__buttons').eq(0);
-        if (!target.length) {
-            var torrent = root.find('.view--torrent').eq(0);
-            if (torrent.length) target = torrent.parent();
-        }
-        if (!target.length) return;
-
-        var movie = event.data && event.data.movie ? event.data.movie : {};
-        var button = $('<div class="full-start__button selector ' + BUTTON_CLASS + '">' +
-            '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">' +
-            '<path fill="currentColor" d="M8 5v14l11-7z"/></svg>' +
-            '<span>Zona</span></div>');
-        button.on('hover:enter', function () { launchZona(movie); });
-        target.append(button);
-    }
-
-    function start() {
-        if (!window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
-        if (window.plugin_zona_launcher_hooked_v01) return;
-        window.plugin_zona_launcher_hooked_v01 = true;
-        Lampa.Listener.follow('full', function (event) {
-            // Actual Lampa event spelling is "complite".
-            if (event && event.type === 'complite') addButton(event);
-        });
-        notify('Zona Launcher готов: открой карточку фильма или сериала.');
-    }
-
-    if (window.Lampa && window.appready) {
-        start();
-    } else if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-        Lampa.Listener.follow('app', function (event) {
-            if (event && event.type === 'ready') start();
-        });
-    } else {
-        console.warn('[Zona Launcher] Lampa API not available at load time');
-    }
+ 'use strict';
+ if (window.zonaBridgePluginV03Loaded) return;
+ window.zonaBridgePluginV03Loaded = true;
+ var BASE='http://192.168.1.10:8765';
+ var BUTTON='view--zona-launcher-v02';
+ function notify(s){ try {Lampa.Noty.show(s)} catch(e){console.log('[Zona Bridge] '+s)} }
+ function currentController(){try{return Lampa.Controller.enabled().name}catch(e){return 'content'}}
+ function movieId(m){var id=m.kinopoisk_id||m.kp_id||m.kpId||m.kinopoiskId||'';return /^[0-9]{1,15}$/.test(String(id))?String(id):''}
+ function movieTitle(m){return m.title||m.name||m.original_title||m.original_name||'Фильм'}
+ function request(url,cb){
+   $.ajax({url:url,type:'GET',dataType:'json',timeout:105000,success:function(data){cb(null,data)},error:function(xhr,status){
+     var err=(xhr.responseJSON&&xhr.responseJSON.error)||('Нет ответа от Zona Bridge: '+status);
+     cb(new Error(err));
+   }});
+ }
+ function streamMenu(movie,row){
+   var quality=Array.isArray(row.streamquality)?row.streamquality:[];
+   var items=quality.map(function(v,i){return {title:v.quality||('Вариант '+(i+1)),url:v.url,act:'play'}})
+   if(!items.length && (row.url||row.stream))items.push({title:row.name||'Воспроизвести',url:row.url||row.stream,act:'play'});
+   if(!items.length){notify('Нет воспроизводимых потоков');return}
+   var previous=currentController();
+   Lampa.Select.show({title:(row.name||movieTitle(movie))+' — качество',items:items,
+      onBack:function(){Lampa.Controller.toggle(previous)},
+      onSelect:function(choice){
+        Lampa.Controller.toggle(previous);
+        try {var obj={url:choice.url,title:movieTitle(movie)+' — '+(row.name||'Zona')+' — '+choice.title};
+        Lampa.Player.play(obj);Lampa.Player.playlist([obj]);}
+        catch(e){notify('Не удалось запустить плеер: '+(e.message||e))}
+      }
+   });
+ }
+ function showLinks(movie,items,title){
+   var previous=currentController();
+   Lampa.Select.show({title:title,items:items.map(function(row){return {title:row.name||row.title||'Источник',row:row}}),
+     onBack:function(){Lampa.Controller.toggle(previous)},
+     onSelect:function(chosen){
+       Lampa.Controller.toggle(previous);
+       var row=chosen.row;
+       if(row.method==='link') {
+          var extra={}; if(typeof row.id==='number'&&row.url&&row.url.indexOf('&s=')!==-1)extra.s=row.id;
+          if(typeof row.s==='number')extra.s=row.s;
+          if(typeof row.e==='number')extra.e=row.e;
+          fetchSources(movie,extra);
+       } else streamMenu(movie,row);
+     }
+   });
+ }
+ function fetchSources(movie,extra){
+   notify('Проверяю связь с Zona Bridge…');
+   request(BASE+'/health',function(err,health){
+     if(err){notify('Zona Bridge недоступен: проверь ПК 192.168.1.10 и порт 8765');return}
+     if(!health.zona_resolver_reachable){
+       notify('Zona Bridge работает, но источник файлов Zona ещё не запущен на ПК (порт 18118).');return
+     }
+     var id=movieId(movie);
+     if(!id){notify('Не найден Kinopoisk ID. Нужен Kinopoisk ID фильма; TMDB ID не подходит.');return}
+     var params={kinopoisk_id:id,title:movieTitle(movie),original_title:movie.original_title||movie.original_name||''};
+     Object.keys(extra||{}).forEach(function(k){params[k]=extra[k]});
+     request(BASE+'/api/streams?'+$.param(params),function(err,data){
+       if(err){notify(err.message);return}
+       if(!data||!data.ok||!Array.isArray(data.data)||!data.data.length){notify((data&&data.error)||'Список потоков пуст');return}
+       showLinks(movie,data.data,'Zona — '+movieTitle(movie));
+     });
+   });
+ }
+ function addButton(e){
+  if(!e||!e.object||!e.object.activity||typeof e.object.activity.render!=='function')return;
+  var root=e.object.activity.render(); if(!root||!root.find||root.find('.'+BUTTON).length)return;
+  var box=root.find('.full-start-new__buttons, .full-start__buttons').eq(0);if(!box.length)return;
+  var movie=e.data&&e.data.movie?e.data.movie:{};
+  var button=$('<div class="full-start__button selector '+BUTTON+'"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg><span>Zona</span></div>');
+  button.on('hover:enter',function(){fetchSources(movie,{})});
+  box.append(button);
+ }
+ function start(){ if(!window.Lampa||!Lampa.Listener||!Lampa.Listener.follow)return;
+    Lampa.Listener.follow('full',function(e){if(e&&e.type==='complite')addButton(e)});
+    notify('Zona Bridge: кнопка Zona подключена к ПК');
+ }
+ if(window.appready)start();else if(window.Lampa&&Lampa.Listener)Lampa.Listener.follow('app',function(e){if(e.type==='ready')start()});
 }());
